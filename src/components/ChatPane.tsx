@@ -76,6 +76,44 @@ export function ChatPane({ chat }: { chat: Chat }) {
   }, []);
 
   useEffect(() => {
+    const root = composerRef.current;
+    const vv = window.visualViewport;
+    if (!root || !vv) return;
+    let frame = 0;
+    const pin = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const active = document.activeElement;
+        const focused = active instanceof HTMLElement && root.contains(active);
+        const scale = vv.scale || 1;
+        const zooming = Math.abs(scale - 1) > 0.01 || Math.abs(vv.offsetLeft) > 1;
+        const lift = Math.max(0, window.innerHeight - vv.height);
+        if (zooming || lift <= 120 || !focused) {
+          root.style.transform = "";
+          root.style.zIndex = "";
+          root.style.paddingBottom = "";
+          return;
+        }
+        root.style.transform = `translate3d(0, ${-lift}px, 0)`;
+        root.style.zIndex = "20";
+        root.style.paddingBottom = "10px";
+      });
+    };
+    pin();
+    vv.addEventListener("resize", pin);
+    vv.addEventListener("scroll", pin);
+    root.addEventListener("focusin", pin);
+    root.addEventListener("focusout", pin);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv.removeEventListener("resize", pin);
+      vv.removeEventListener("scroll", pin);
+      root.removeEventListener("focusin", pin);
+      root.removeEventListener("focusout", pin);
+    };
+  }, []);
+
+  useEffect(() => {
     if (editUser) requestAnimationFrame(() => inputRef.current?.focus());
   }, [editUser?.msgId]);
 
@@ -207,6 +245,7 @@ export function ChatPane({ chat }: { chat: Chat }) {
 
       <div
         ref={composerRef}
+        data-composer
         className="shrink-0 touch-none bg-bg px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-1"
       >
         {!isWorkshopChat(chat) && <WechatChip chatId={chat.id} />}
