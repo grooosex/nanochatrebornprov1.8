@@ -1,6 +1,7 @@
 import { applySnaps, rewindSnaps } from "./chat-memory";
 import { affinityUpdates } from "./scene-bar";
-import type { Chat, ChatMessage, ForkSet, ForkVersion } from "./types";
+import type { Chat, ChatMessage, ForkSet, ForkVersion, UserShot } from "./types";
+import { messageShots, stampShots } from "./user-markup";
 
 type Mem = Pick<Chat, "memory" | "memoryUntil" | "memoryFoldAt" | "memorySnaps">;
 
@@ -13,7 +14,7 @@ function memOf(chat: Chat): Mem {
   };
 }
 
-function capture(messages: ChatMessage[], affections: Record<string, number> | undefined, mem: Mem): ForkVersion {
+function capture(messages: ChatMessage[], affections: Record<string, number> | undefined, mem: Mem, prev?: ForkVersion): ForkVersion {
   return {
     messages: structuredClone(messages),
     affections: affections ? { ...affections } : undefined,
@@ -21,6 +22,8 @@ function capture(messages: ChatMessage[], affections: Record<string, number> | u
     memoryUntil: mem.memoryUntil,
     memoryFoldAt: mem.memoryFoldAt,
     memorySnaps: structuredClone(mem.memorySnaps || []),
+    anchorText: prev?.anchorText,
+    anchorShots: prev?.anchorShots ? prev.anchorShots.map((s) => ({ ...s })) : undefined,
   };
 }
 
@@ -155,7 +158,7 @@ export function parkFork(chat: Chat, suffixStart: number): Chat {
   const currentMem = memOf(chat);
   const currentAff = chat.affections ? { ...chat.affections } : undefined;
   const versions = existing?.versions.length
-    ? existing.versions.map((v, i) => (i === existing.active ? capture(suffix, currentAff, currentMem) : v))
+    ? existing.versions.map((v, i) => (i === existing.active ? capture(suffix, currentAff, currentMem, v) : v))
     : [capture(suffix, currentAff, currentMem)];
   versions.push(capture([], prefixAff, prefixMem));
   const forkSet: ForkSet = { active: versions.length - 1, versions };
@@ -171,6 +174,26 @@ export function parkFork(chat: Chat, suffixStart: number): Chat {
   };
 }
 
+/** 编辑用户这句时，旧句抄进已有的每一支，新句只写当前这一支。 */
+export function noteUserEdit(
+  chat: Chat,
+  msgId: string,
+  oldText: string,
+  oldShots: UserShot[],
+  newText: string,
+  newShots: UserShot[],
+): Chat {
+  const set = chat.forks?.[msgId];
+  if (!set) return chat;
+  const keep = (shots: UserShot[]) => shots.map((s) => ({ ...s }));
+  const versions = set.versions.map((v, i) => {
+    if (i === set.active) return { ...v, anchorText: newText, anchorShots: keep(newShots) };
+    if (v.anchorText === undefined) return { ...v, anchorText: oldText, anchorShots: keep(oldShots) };
+    return v;
+  });
+  return { ...chat, forks: { ...chat.forks, [msgId]: { ...set, versions } } };
+}
+
 export function switchFork(chat: Chat, anchorId: string | null, dir: -1 | 1): Chat {
   const key = forkKey(anchorId);
   const forks = chat.forks?.[key];
@@ -179,14 +202,24 @@ export function switchFork(chat: Chat, anchorId: string | null, dir: -1 | 1): Ch
   if (anchorId && anchorIdx < 0) return chat;
   const nodeStart = anchorId ? anchorIdx + 1 : 0;
   const prefix = chat.messages.slice(0, nodeStart);
-  const versions = forks.versions.map((v, i) =>
-    i === forks.active ? capture(chat.messages.slice(nodeStart), chat.affections, memOf(chat)) : v,
-  );
+  const versions = forks.versions.map((v, i) => {
+    if (i !== forks.active) return v;
+    const saved = capture(chat.messages.slice(nodeStart), chat.affections, memOf(chat), v);
+    const anchor = anchorId ? chat.messages[anchorIdx] : undefined;
+    if (v.anchorText !== undefined && anchor?.role === "user") {
+      return { ...saved, anchorText: anchor.content, anchorShots: messageShots(anchor) };
+    }
+    return saved;
+  });
   const next = (forks.active + dir + versions.length) % versions.length;
   const chosen = versions[next];
+  const head = prefix.map((m) => {
+    if (!anchorId || m.id !== anchorId || chosen.anchorText === undefined || m.role !== "user") return m;
+    return stampShots({ ...m, content: chosen.anchorText }, chosen.anchorShots ?? []);
+  });
   return {
     ...chat,
-    messages: [...prefix, ...structuredClone(chosen.messages)],
+    messages: [...head, ...structuredClone(chosen.messages)],
     affections: chosen.affections ? { ...chosen.affections } : {},
     memory: chosen.memory,
     memoryUntil: chosen.memoryUntil,

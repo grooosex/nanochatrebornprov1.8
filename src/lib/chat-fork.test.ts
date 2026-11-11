@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { hiddenForkText, liveText, mapForkMessages, parkFork, switchFork } from "./chat-fork.ts";
+import { hiddenForkText, liveText, mapForkMessages, noteUserEdit, parkFork, switchFork } from "./chat-fork.ts";
 import type { Chat, ChatMessage } from "./types.ts";
 
 function love(n: number) {
@@ -98,5 +98,27 @@ describe("chat forks", () => {
     const back = switchFork(written, "u2", 1);
     assert.match(liveText(back), /写了一半/);
     assert.equal(back.messages.some((m) => m.id === "a82"), false);
+  });
+
+  it("keeps each branch's own user line after an edit", () => {
+    let cur = chat(
+      [msg("u1", "user", "第一句"), msg("a100", "assistant", love(100)), msg("u2", "user", "后来"), msg("a82", "assistant", love(82))],
+      { a: 82 },
+    );
+    cur = parkFork(cur, 3);
+    cur = { ...cur, messages: [...cur.messages, msg("aNew", "assistant", love(101))] };
+    cur = noteUserEdit(cur, "u2", "后来", [], "改过的这句", []);
+    cur = {
+      ...cur,
+      messages: cur.messages.map((m) => (m.id === "u2" ? { ...m, content: "改过的这句" } : m)),
+    };
+    const back = switchFork(cur, "u2", -1);
+    assert.equal(back.messages.find((m) => m.id === "u2")?.content, "后来");
+    assert.equal(back.messages.some((m) => m.id === "a82"), true);
+    assert.equal(back.messages.some((m) => m.id === "aNew"), false);
+    const forward = switchFork(back, "u2", 1);
+    assert.equal(forward.messages.find((m) => m.id === "u2")?.content, "改过的这句");
+    assert.equal(forward.messages.some((m) => m.id === "aNew"), true);
+    assert.equal(forward.messages.some((m) => m.content === "后来"), false);
   });
 });

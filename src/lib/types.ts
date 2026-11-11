@@ -223,6 +223,9 @@ export interface ForkVersion {
   memoryUntil: number;
   memoryFoldAt: number;
   memorySnaps: MemorySnap[];
+  /** 这一支自己的用户原句。没有就是还跟屏幕上那句共用。 */
+  anchorText?: string;
+  anchorShots?: UserShot[];
 }
 
 export interface ForkSet {

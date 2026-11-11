@@ -29,7 +29,7 @@ import { presetStyle } from "@/lib/st-preset";
 import { affinityUpdates } from "@/lib/scene-bar";
 import { chatImageSystem, openingHint, sceneTail } from "@/lib/prompts";
 import { applySnaps, foldCoveredEnd, memoryCaughtUp, memoryFailReason, pushSnap, rewindSnaps } from "@/lib/chat-memory";
-import { branchView, failedReply, forkIsLive, mapForkMessages, parkFork, switchFork, writeForkAffection, type ForkSlot } from "@/lib/chat-fork";
+import { branchView, failedReply, forkIsLive, mapForkMessages, noteUserEdit, parkFork, switchFork, writeForkAffection, type ForkSlot } from "@/lib/chat-fork";
 import { resolveImageWrite } from "@/lib/image-ai";
 import type { Chat, ChatMessage, GenImage, ImageGenSource, UserShot } from "@/lib/types";
 import { randomSeed, uid } from "@/lib/utils";
@@ -793,8 +793,10 @@ export async function editMessage(id: string, msgId: string, text: string, shots
     abortChat(id);
     bumpMemoryEpoch(id);
     const dropped = detachWechat(id);
+    const oldText = msg.content;
+    const oldShots = messageShots(msg);
     patch(id, (ch) => {
-      const parked = parkFork(ch, idx + 1);
+      const parked = noteUserEdit(parkFork(ch, idx + 1), msgId, oldText, oldShots, text.trim(), shots ?? []);
       const messages = parked.messages.map((m) => (m.id === msgId ? stampShots({ ...m, content: text.trim() }, shots ?? []) : m));
       if (dropped) messages.push(dropped);
       return { ...parked, messages };
