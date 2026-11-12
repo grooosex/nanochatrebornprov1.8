@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Clock, Folder, Image as ImageIcon, MessageCircle, Star } from "lucide-react";
+import { Clock, ChevronsDown, ChevronsUp, Folder, Image as ImageIcon, MessageCircle, Star } from "lucide-react";
 import { getImage, imageUrl } from "@/lib/idb";
 import { isImageFile } from "@/lib/ref-image";
 import { useApp } from "@/lib/store";
@@ -20,6 +20,8 @@ export function ImagePick({
   onBlobs,
   onStored,
   onWechat,
+  foldOld,
+  onToggleFold,
   multiple = false,
   render,
 }: {
@@ -29,6 +31,8 @@ export function ImagePick({
   onBlobs?: (blobIds: string[]) => void | Promise<void>;
   onStored?: (pick: StoredPick) => void;
   onWechat?: () => void;
+  foldOld?: boolean;
+  onToggleFold?: () => void;
   multiple?: boolean;
   render: (open: () => void) => ReactNode;
 }) {
@@ -108,6 +112,17 @@ export function ImagePick({
                 />
                 <MenuRow icon={<Clock className="size-6 shrink-0" />} label="历史" border onClick={() => setOpen("hist")} />
                 <MenuRow icon={<Star className="size-6 shrink-0" />} label="收藏" border onClick={() => setOpen("fav")} />
+                {onToggleFold ? (
+                  <MenuRow
+                    icon={foldOld ? <ChevronsUp className="size-6 shrink-0" /> : <ChevronsDown className="size-6 shrink-0" />}
+                    label={foldOld ? "全部展开" : "折叠旧回复"}
+                    border
+                    onClick={() => {
+                      close();
+                      onToggleFold();
+                    }}
+                  />
+                ) : null}
                 {onWechat ? (
                   <MenuRow
                     icon={<MessageCircle className="size-6 shrink-0" />}

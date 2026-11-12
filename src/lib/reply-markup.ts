@@ -22,6 +22,7 @@ const TOP = new Set([
   "option",
   "details",
   "summary",
+  "comment",
   "os",
   "disclaimer",
   "safety_check",
@@ -261,6 +262,8 @@ export function parseReplyMarkup(raw: string): ParsedReply {
       pushNote(d.title, d.body);
     } else if (t.name === "summary") {
       pushNote("摘要", tidy(inner));
+    } else if (t.name === "comment") {
+      pushNote("猫猫留言", tidy(inner));
     } else if (t.name === "options") {
       options.push(...parseOptions(inner));
     } else if (t.name === "option") {

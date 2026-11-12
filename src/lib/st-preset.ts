@@ -175,26 +175,44 @@ function isAfter(p: PromptRow, passedHistory: boolean) {
   return passedHistory;
 }
 
+/** 新版小猫之神的面板标记。没有这些字就原样返回，2.4 的提示词一个字都不动。 */
+export function stripCatgodDirectives(text: string): string {
+  if (!text || (!text.includes("catgodml") && !text.includes("run_tool_replacement"))) return text;
+  const s = text
+    .replace(/<<<\|catgodml\|[\s\S]*?>>>/g, "")
+    .replace(/<run_tool_replacement>/g, "")
+    .replace(/小猫之神会使用reply工具回复，/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return s;
+}
+
 export function presetTexts(preset: StPreset, mode: "new" | "old" = "new"): { systemPrompt: string; postHistory: string } {
   if (
     mode === "old" &&
     (typeof preset.legacySystemPrompt === "string" || typeof preset.legacyPostHistory === "string")
   ) {
     return {
-      systemPrompt: preset.legacySystemPrompt ?? "",
-      postHistory: preset.legacyPostHistory ?? "",
+      systemPrompt: stripCatgodDirectives(preset.legacySystemPrompt ?? ""),
+      postHistory: stripCatgodDirectives(preset.legacyPostHistory ?? ""),
     };
   }
-  if (!preset.items?.length) return { systemPrompt: preset.systemPrompt, postHistory: preset.postHistory };
+  if (!preset.items?.length) {
+    return {
+      systemPrompt: stripCatgodDirectives(preset.systemPrompt),
+      postHistory: stripCatgodDirectives(preset.postHistory),
+    };
+  }
   const on = preset.items.filter((item) => item.enabled && item.usable && item.content.trim());
   return {
     systemPrompt: on
       .filter((item) => item.place !== "after")
-      .map((item) => item.content.trim())
+      .map((item) => stripCatgodDirectives(item.content.trim()))
       .join("\n\n"),
     postHistory: on
       .filter((item) => item.place === "after")
-      .map((item) => item.content.trim())
+      .map((item) => stripCatgodDirectives(item.content.trim()))
       .join("\n\n"),
   };
 }

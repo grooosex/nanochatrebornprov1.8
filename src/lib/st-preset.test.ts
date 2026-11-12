@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseChatCompletionPreset, substituteMacros, uniquePresetName, imagePresetStyle, defaultSampler, presetTexts } from "./st-preset.ts";
+import { parseChatCompletionPreset, substituteMacros, uniquePresetName, imagePresetStyle, defaultSampler, presetTexts, stripCatgodDirectives } from "./st-preset.ts";
 import { systemFor, RP_SYSTEM, POLISH_SYSTEM, FIELD_SYSTEM } from "./prompts.ts";
 
 const sample = {
@@ -146,6 +146,21 @@ describe("st chat completion preset", () => {
     assert.equal(presetTexts(p, "new").systemPrompt.includes("不要发"), false);
     assert.match(presetTexts(p, "old").systemPrompt, /不要发/);
     assert.match(presetTexts(p, "old").systemPrompt, /不在表里/);
+  });
+
+  it("strips only the new catgod panel lines", () => {
+    const oldLine = "正文要用<game></game>标签包上{{// 注释：如果这个格式与你的角色卡不兼容，直接关掉就好}}";
+    assert.equal(stripCatgodDirectives(oldLine), oldLine);
+    const row =
+      "<<<|catgodml|menu:输出格式模块:📏<game>正文包裹>>>\n正文要用<game></game>标签包上";
+    assert.equal(stripCatgodDirectives(row), "正文要用<game></game>标签包上");
+    const init =
+      "{{trim}}<|sep|><|merge|>小猫之神会使用reply工具回复，在回复之前，小猫之神在<think_nya>中进行详细、深入的思考~<run_tool_replacement><<<|catgodml|enableMenu>>>";
+    const cleaned = stripCatgodDirectives(init);
+    assert.equal(cleaned.includes("catgodml"), false);
+    assert.equal(cleaned.includes("reply工具"), false);
+    assert.match(cleaned, /think_nya/);
+    assert.match(cleaned, /\{\{trim\}\}/);
   });
 
   it("restoring default sampler leaves locked numbers alone", () => {

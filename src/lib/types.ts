@@ -285,6 +285,8 @@ export interface Chat {
   kind?: "assistant" | "card";
   /** 助手自己的要求。只进这一个助手的提示词。 */
   brief?: string;
+  /** 开了就收起更早的回复，只留最近两轮。 */
+  foldOld?: boolean;
 }
 
 export interface Folder {

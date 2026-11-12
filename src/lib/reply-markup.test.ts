@@ -111,6 +111,17 @@ describe("parseReplyMarkup", () => {
     );
     assert.equal(p.body, "正文");
   });
+
+  it("folds the new comment tag and still folds the old 留言 details", () => {
+    const next = parseReplyMarkup("<game>她坐着。</game>\n<comment>这轮写得有点急。</comment>");
+    assert.equal(next.body, "她坐着。");
+    assert.equal(next.folds.some((f) => f.title === "猫猫留言" && f.body === "这轮写得有点急。"), true);
+    assert.equal(next.body.includes("有点急"), false);
+    const old = parseReplyMarkup("<details><summary>小猫之神的留言</summary>还是这句。</details><game>正文。</game>");
+    assert.equal(old.body, "正文。");
+    assert.equal(old.folds.some((f) => f.title === "小猫之神的留言"), true);
+    assert.equal(old.folds.some((f) => f.title === "猫猫留言"), false);
+  });
 });
 
 describe("replyContextText", () => {

@@ -43,6 +43,52 @@ import { ChatAvatar, ExpandSelect, Modal, TextArea, useCooldown, ZoomImg } from 
 
 const noShots: UserShot[] = [];
 
+const foldHands = new Map<string, { open: Set<string>; shut: Set<string> }>();
+
+function foldHand(id: string) {
+  let hand = foldHands.get(id);
+  if (!hand) {
+    hand = { open: new Set(), shut: new Set() };
+    foldHands.set(id, hand);
+  }
+  return hand;
+}
+
+function replyFoldView(messages: ChatMessage[], on: boolean, hand: { open: Set<string>; shut: Set<string> }) {
+  const hidden = new Set<string>();
+  const icons = new Map<string, boolean>();
+  if (!on) return { hidden, icons };
+  const rounds: { userId: string; start: number; end: number; done: boolean; live: boolean }[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== "user") continue;
+    let end = i;
+    let done = false;
+    let live = false;
+    for (let j = i + 1; j < messages.length; j++) {
+      if (messages[j].role === "user") break;
+      end = j;
+      if (messages[j].content) done = true;
+      else live = true;
+    }
+    if (end > i) rounds.push({ userId: messages[i].id, start: i + 1, end, done, live });
+  }
+  const keep = new Set(rounds.filter((r) => r.done).slice(-2).map((r) => r.userId));
+  for (const round of rounds) {
+    const open = round.live
+      ? true
+      : hand.shut.has(round.userId)
+        ? false
+        : hand.open.has(round.userId)
+          ? true
+          : keep.has(round.userId);
+    icons.set(round.userId, open);
+    if (!open) {
+      for (let i = round.start; i <= round.end; i++) hidden.add(messages[i].id);
+    }
+  }
+  return { hidden, icons };
+}
+
 export function ChatPane({ chat }: { chat: Chat }) {
   const cooldownUntil = useApp((s) => s.settings.cooldownUntil);
   const left = useCooldown(cooldownUntil);
@@ -53,6 +99,7 @@ export function ChatPane({ chat }: { chat: Chat }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const [foldTick, setFoldTick] = useState(0);
   const draft = useApp((s) => s.composerDrafts[chat.id] ?? "");
   const shots = useApp((s) => s.composerShots[chat.id] ?? noShots);
 
@@ -180,6 +227,21 @@ export function ChatPane({ chat }: { chat: Chat }) {
   const memOkFlash = memMine && memoryHint?.state === "ok";
   const memFail = !memOk && !memGenerating && !memOkFlash;
   const failReason = memMine && memoryHint?.state === "fail" ? memoryHint.error : "";
+  const foldOn = chat.foldOld === true;
+  const foldView = replyFoldView(chat.messages, foldOn, foldHand(chat.id));
+  void foldTick;
+  const toggleRound = (userId: string) => {
+    const hand = foldHand(chat.id);
+    const open = foldView.icons.get(userId) === true;
+    if (open) {
+      hand.open.delete(userId);
+      hand.shut.add(userId);
+    } else {
+      hand.shut.delete(userId);
+      hand.open.add(userId);
+    }
+    setFoldTick((n) => n + 1);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -227,11 +289,14 @@ export function ChatPane({ chat }: { chat: Chat }) {
             </p>
           </div>
         )}
-        {chat.messages.map((m) => (
+        {chat.messages.map((m) =>
+          foldView.hidden.has(m.id) ? null : (
           <Bubble
             key={m.id}
             chat={chat}
             msg={m}
+            foldOpen={m.role === "user" ? foldView.icons.get(m.id) : undefined}
+            onToggleFold={m.role === "user" && foldView.icons.has(m.id) ? () => toggleRound(m.id) : undefined}
             showImageTray={chatImage && !isWorkshopChat(chat) && m.role !== "user"}
             onUseOption={(t) => {
               useApp.getState().setComposerDraft(chat.id, t);
@@ -385,6 +450,12 @@ export function ChatPane({ chat }: { chat: Chat }) {
             onFiles={(files) => void addChatShots(chat.id, files, null)}
             onBlobs={(ids) => void addChatShots(chat.id, null, ids)}
             onWechat={() => openWechat(chat)}
+            foldOld={foldOn}
+            onToggleFold={() => {
+              foldHands.delete(chat.id);
+              setFoldTick((n) => n + 1);
+              useApp.getState().patchChat(chat.id, { foldOld: !foldOn });
+            }}
             render={(open) => (
               <button
                 type="button"
@@ -699,18 +770,35 @@ function AffinityEdit({
   );
 }
 
+function FoldMark({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={open ? "折叠这轮回复" : "展开这轮回复"}
+      onClick={onToggle}
+      className="grid size-7 shrink-0 place-items-center text-muted"
+    >
+      {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+    </button>
+  );
+}
+
 function Bubble({
   chat,
   msg,
   showImageTray,
   onUseOption,
   onEditUser,
+  foldOpen,
+  onToggleFold,
 }: {
   chat: Chat;
   msg: ChatMessage;
   showImageTray?: boolean;
   onUseOption?: (text: string) => void;
   onEditUser?: () => void;
+  foldOpen?: boolean;
+  onToggleFold?: () => void;
 }) {
   const [edit, setEdit] = useState(false);
   const [text, setText] = useState(msg.content);
@@ -785,17 +873,21 @@ function Bubble({
         <RefreshCw className="size-3" />
       </button>
     );
+    const foldMark = onToggleFold ? <FoldMark open={foldOpen === true} onToggle={onToggleFold} /> : null;
     if (msg.wechatLog) {
       return (
         <div className="mb-4 flex flex-col items-end">
-          <div className="flex w-fit max-w-[85%] flex-col">
-            <button
-              type="button"
-              className="w-fit self-end rounded-[12px] border border-line bg-card px-4 py-3 text-[14px] text-ink"
-              onClick={() => useApp.getState().setUI({ wechatView: { chatId: chat.id, msgId: msg.id } })}
-            >
-              {msg.wechatLog.voided ? "失效的聊天记录" : "已保存的微信内容"}
-            </button>
+          <div className="flex w-fit max-w-[85%] flex-col items-end">
+            <div className="flex items-center gap-1 self-end">
+              {foldMark}
+              <button
+                type="button"
+                className="w-fit self-end rounded-[12px] border border-line bg-card px-4 py-3 text-[14px] text-ink"
+                onClick={() => useApp.getState().setUI({ wechatView: { chatId: chat.id, msgId: msg.id } })}
+              >
+                {msg.wechatLog.voided ? "失效的聊天记录" : "已保存的微信内容"}
+              </button>
+            </div>
             <div className="mt-1.5 flex items-center gap-2">
               {pagerOf(rowPager)}
               <div className="ml-auto flex gap-1.5">
@@ -816,14 +908,17 @@ function Bubble({
           </div>
         ) : null}
         {msg.content.trim() ? (
-          <div className="flex w-fit max-w-[85%] flex-col">
-            <div
-              className={cn(
-                "w-fit min-h-[2.75rem] min-w-[5.5rem] max-w-full self-end rounded-[18px] border px-4 py-2.5",
-                editingUser ? "border-primary bg-card" : "border-line bg-card",
-              )}
-            >
-              <div className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink">{msg.content}</div>
+          <div className="flex w-fit max-w-[85%] flex-col items-end">
+            <div className="flex items-center gap-1 self-end">
+              {foldMark}
+              <div
+                className={cn(
+                  "w-fit min-h-[2.75rem] min-w-[5.5rem] max-w-full self-end rounded-[18px] border px-4 py-2.5",
+                  editingUser ? "border-primary bg-card" : "border-line bg-card",
+                )}
+              >
+                <div className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink">{msg.content}</div>
+              </div>
             </div>
             <div className="mt-1.5 flex items-center gap-2">
               {pagerOf(rowPager)}
@@ -836,6 +931,7 @@ function Bubble({
           </div>
         ) : (
           <div className="mt-1.5 flex w-full items-center gap-2">
+            {foldMark}
             {pagerOf(rowPager)}
             <div className="ml-auto flex gap-1.5">
               {regenBelow}
