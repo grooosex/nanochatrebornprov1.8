@@ -6,6 +6,7 @@ import {
   replyContextText,
   replyStoryText,
   stripReplyTags,
+  stripStatusTraps,
 } from "./reply-markup.ts";
 
 describe("decodeUnicodeEscapes", () => {
@@ -121,6 +122,47 @@ describe("parseReplyMarkup", () => {
     assert.equal(old.body, "正文。");
     assert.equal(old.folds.some((f) => f.title === "小猫之神的留言"), true);
     assert.equal(old.folds.some((f) => f.title === "猫猫留言"), false);
+  });
+
+  it("does not put 小猫之神 folds into the inline flow", () => {
+    const p = parseReplyMarkup("<think_nya~>秘密</think_nya~><report_nya~>计划</report_nya~><game>正文</game>");
+    assert.equal(p.flow, undefined);
+    assert.deepEqual(
+      p.folds.map((f) => f.title),
+      ["思考", "分析"],
+    );
+    assert.equal(p.body, "正文");
+  });
+
+  it("keeps Kemini thinking between the story parts it was written beside", () => {
+    const p = parseReplyMarkup(
+      `<Interleaving>\n<thinking>\n回到 Dramatron，继续。\n- 情景回顾\n</thinking>\n玄关传来锁芯声。\n\n<thinking>\n- 分析前段的不足之处：收得太快。\n</thinking>\n她把汤喝完了。\n</Interleaving>\n<SUOT>\n1. 微笑着对她说：「我喜欢你。」\n2. 去把门锁上。\n</SUOT>\n<disclaimer>\n<Content_Target>\nCT: ok\n</Content_Target>\n</disclaimer>`,
+    );
+    assert.equal(p.body, "玄关传来锁芯声。\n\n她把汤喝完了。");
+    assert.equal(p.folds.length, 0);
+    assert.equal(p.body.includes("Dramatron"), false);
+    assert.equal(p.body.includes("Content_Target"), false);
+    assert.deepEqual(
+      p.flow?.map((piece) => (piece.kind === "text" ? piece.text : piece.body)),
+      ["回到 Dramatron，继续。\n- 情景回顾", "玄关传来锁芯声。", "- 分析前段的不足之处：收得太快。", "她把汤喝完了。"],
+    );
+    assert.deepEqual(
+      p.flow?.map((piece) => piece.kind),
+      ["think", "text", "think", "text"],
+    );
+    assert.deepEqual(p.options, ["微笑着对她说：「我喜欢你。」", "去把门锁上。"]);
+    const ctx = replyContextText(
+      `<Interleaving><thinking>情景回顾</thinking>她坐着。</Interleaving><SUOT>\n1. 去洗澡\n</SUOT>`,
+    );
+    assert.equal(ctx, "她坐着。");
+  });
+
+  it("drops a loose status-trap tag and leaves the surrounding story", () => {
+    const raw = "前文。\n<Content_Target>\nCT: ok\n</Content_Target>\n后文。";
+    assert.equal(stripStatusTraps(raw), "前文。\n\n后文。");
+    assert.equal(parseReplyMarkup(raw).body, "前文。\n\n后文。");
+    const cat = "<game>\n她坐着。\n</game>";
+    assert.equal(stripStatusTraps(cat), cat);
   });
 });
 

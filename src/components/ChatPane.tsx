@@ -34,7 +34,7 @@ import { memoryCaughtUp } from "@/lib/chat-memory";
 import { splitDialogue, stripSpeakerPrefix } from "@/lib/rp-text";
 import { fontStack, readLook, sayWeight } from "@/lib/look";
 import { SceneBackdrop } from "./LookSheet";
-import { parseReplyMarkup, type ReplyFold } from "@/lib/reply-markup";
+import { parseReplyMarkup, stripStatusTraps, type ReplyFold } from "@/lib/reply-markup";
 import type { Chat, ChatMessage, GenImage, ImageGenSource, MultiMode, PromptInsertMode, UserShot } from "@/lib/types";
 import { CHAT_SHOT_MAX, messageShots } from "@/lib/user-markup";
 import { attachImage, abortChat, branchFrom, cancelImage, cancelMemory, editMessage, regenAfterUser, regenMessage, replyPending, retryMemory, sendUser, swipeFork } from "./chat-actions";
@@ -830,10 +830,11 @@ function Bubble({
         onNext={() => swipeFork(chat.id, info.anchorId, 1)}
       />
     ) : null;
+  const sceneSource = msg.role === "user" ? msg.content : stripStatusTraps(msg.content);
   const scene =
     msg.role === "user"
       ? { body: msg.content, cards: [] as SceneCard[] }
-      : presentScene(msg.content, { status: statusOn, affection: loveOn }, person);
+      : presentScene(sceneSource, { status: statusOn, affection: loveOn }, person);
   const cards = msg.role === "narrator" ? [] : scene.cards;
   const editingUser = useApp((s) => s.ui.editUserMsg?.msgId === msg.id);
 
@@ -1094,6 +1095,40 @@ function ReplyView({
   const parsed = parseReplyMarkup(text);
   const think = parsed.folds.filter((f) => f.kind === "think");
   const notes = parsed.folds.filter((f) => f.kind === "note");
+  const options = parsed.options.length > 0 ? (
+    <div className="mt-3 space-y-1.5">
+      {parsed.options.map((opt, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onUseOption?.(opt)}
+          className="block w-full rounded-[16px] border border-line bg-card px-3 py-2 text-left text-[13px] leading-snug text-ink"
+        >
+          {opt}
+        </button>
+      ))}
+    </div>
+  ) : null;
+  if (parsed.flow) {
+    return (
+      <>
+        {think.map((f, i) => (
+          <ReplyFoldRow key={`think-${i}-${f.title}`} fold={f} />
+        ))}
+        {parsed.flow.map((piece, i) =>
+          piece.kind === "text" ? (
+            <RpBody key={`flow-${i}`} text={piece.text} names={names} chat={chat} />
+          ) : (
+            <ReplyFoldRow key={`flow-${i}`} fold={{ kind: "think", title: piece.title, body: piece.body }} />
+          ),
+        )}
+        {notes.map((f, i) => (
+          <ReplyFoldRow key={`note-${i}-${f.title}`} fold={f} />
+        ))}
+        {options}
+      </>
+    );
+  }
   return (
     <>
       {think.map((f, i) => (
@@ -1103,20 +1138,7 @@ function ReplyView({
       {notes.map((f, i) => (
         <ReplyFoldRow key={`note-${i}-${f.title}`} fold={f} />
       ))}
-      {parsed.options.length > 0 ? (
-        <div className="mt-3 space-y-1.5">
-          {parsed.options.map((opt, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => onUseOption?.(opt)}
-              className="block w-full rounded-[16px] border border-line bg-card px-3 py-2 text-left text-[13px] leading-snug text-ink"
-            >
-              {opt}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {options}
     </>
   );
 }

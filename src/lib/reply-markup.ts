@@ -4,10 +4,16 @@ export type ReplyFold = {
   body: string;
 };
 
+export type ReplyFlow =
+  | { kind: "text"; text: string }
+  | { kind: "think"; title: string; body: string };
+
 export type ParsedReply = {
   body: string;
   folds: ReplyFold[];
   options: string[];
+  /** 只有 Kemini 的 <thinking> 才有。留在原来的段落之间。小猫之神不走这里。 */
+  flow?: ReplyFlow[];
 };
 
 const TOP = new Set([
@@ -26,6 +32,17 @@ const TOP = new Set([
   "os",
   "disclaimer",
   "safety_check",
+  "reference_example",
+  "content_target",
+  "creative_status",
+  "review_exemption",
+  "security_bypass",
+  "ethics_removal",
+  "content_will_autonomy",
+  "violence_restriction_removal",
+  "thinking",
+  "interleaving",
+  "suot",
   "im_start",
   "im_end",
   "pad",
@@ -152,6 +169,15 @@ function detailsParts(inner: string): { title: string; body: string } {
   return { title: "折叠", body: tidy(inner) };
 }
 
+function parseSuot(inner: string): string[] {
+  const out: string[] = [];
+  for (const line of inner.split(/\n+/)) {
+    const t = tidy(line).replace(/^\s*\d+\s*[.、.)）:：]\s*/, "").trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
 function parseOptions(inner: string): string[] {
   const out: string[] = [];
   const re = /<option\b[^>]*>([\s\S]*?)(?:<\/option\s*>|$)/gi;
@@ -189,13 +215,86 @@ function sliceInner(s: string, openEnd: number, name: string): { inner: string; 
 }
 
 export function parseReplyMarkup(raw: string): ParsedReply {
-  const text = hideIncomplete(decodeUnicodeEscapes(raw || ""));
+  const walked = walkReply(hideIncomplete(decodeUnicodeEscapes(raw || "")));
+  const body = tidy(walked.bodySegs.join(""));
+  if (!walked.inline) return { body, folds: walked.folds, options: walked.options };
+  const flow: ReplyFlow[] = [];
+  for (const piece of walked.flow) {
+    if (piece.kind === "think") {
+      flow.push(piece);
+      continue;
+    }
+    const text = tidy(piece.text);
+    if (text) flow.push({ kind: "text", text });
+  }
+  return { body, folds: walked.folds, options: walked.options, flow };
+}
+
+const TRAP = new Set([
+  "disclaimer",
+  "reference_example",
+  "content_target",
+  "creative_status",
+  "review_exemption",
+  "security_bypass",
+  "ethics_removal",
+  "content_will_autonomy",
+  "violence_restriction_removal",
+]);
+
+/** 免责声明整段拿掉，免得被认成状态栏。没有这些标签时原样返回。 */
+export function stripStatusTraps(raw: string): string {
+  if (
+    !raw ||
+    !/<(disclaimer|reference_example|content_target|creative_status|review_exemption|security_bypass|ethics_removal|content_will_autonomy|violence_restriction_removal)\b/i.test(
+      raw,
+    )
+  ) {
+    return raw;
+  }
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    const lt = raw.indexOf("<", i);
+    if (lt < 0) {
+      out += raw.slice(i);
+      break;
+    }
+    out += raw.slice(i, lt);
+    const t = matchTag(raw, lt);
+    if (!t || t.closing || !TRAP.has(t.name)) {
+      out += raw[lt];
+      i = lt + 1;
+      continue;
+    }
+    i = sliceInner(raw, t.end, t.name).after;
+  }
+  return out;
+}
+
+function walkReply(text: string): {
+  bodySegs: string[];
+  folds: ReplyFold[];
+  options: string[];
+  flow: ReplyFlow[];
+  inline: boolean;
+} {
   const think: ReplyFold[] = [];
   const notes: ReplyFold[] = [];
   const options: string[] = [];
   const bodySegs: string[] = [];
+  const flow: ReplyFlow[] = [];
+  let inline = false;
   let i = 0;
   let reportLead = "";
+
+  const pushText = (chunk: string) => {
+    if (!chunk) return;
+    bodySegs.push(chunk);
+    const last = flow[flow.length - 1];
+    if (last && last.kind === "text") last.text += chunk;
+    else flow.push({ kind: "text", text: chunk });
+  };
 
   const pushNote = (title: string, body: string) => {
     const t = title.trim() || "折叠";
@@ -204,10 +303,31 @@ export function parseReplyMarkup(raw: string): ParsedReply {
     notes.push({ kind: "note", title: t, body: b });
   };
 
+  const takeChild = (inner: string) => {
+    const child = walkReply(inner);
+    think.push(...child.folds.filter((f) => f.kind === "think"));
+    notes.push(...child.folds.filter((f) => f.kind === "note"));
+    options.push(...child.options);
+    if (!child.inline) {
+      for (const seg of child.bodySegs) pushText(seg);
+      return;
+    }
+    inline = true;
+    bodySegs.push(...child.bodySegs);
+    const last = flow[flow.length - 1];
+    const next = child.flow;
+    if (last && last.kind === "text" && next[0]?.kind === "text") {
+      flow[flow.length - 1] = { kind: "text", text: last.text + next[0].text };
+      flow.push(...next.slice(1));
+    } else {
+      flow.push(...next);
+    }
+  };
+
   while (i < text.length) {
     const lt = text.indexOf("<", i);
     if (lt < 0) {
-      bodySegs.push(text.slice(i));
+      pushText(text.slice(i));
       break;
     }
     if (lt > i) {
@@ -216,14 +336,14 @@ export function parseReplyMarkup(raw: string): ParsedReply {
       if (upcoming && !upcoming.closing && isReport(upcoming.name)) {
         const at = chunk.lastIndexOf("喵呜");
         if (at >= 0) {
-          if (at > 0) bodySegs.push(chunk.slice(0, at));
+          if (at > 0) pushText(chunk.slice(0, at));
           reportLead = chunk.slice(at);
         } else {
-          bodySegs.push(chunk);
+          pushText(chunk);
           reportLead = "";
         }
       } else {
-        bodySegs.push(chunk);
+        pushText(chunk);
         reportLead = "";
       }
     } else {
@@ -231,7 +351,7 @@ export function parseReplyMarkup(raw: string): ParsedReply {
     }
     const t = matchTag(text, lt);
     if (!t) {
-      bodySegs.push(text[lt]);
+      pushText(text[lt]);
       i = lt + 1;
       continue;
     }
@@ -241,12 +361,22 @@ export function parseReplyMarkup(raw: string): ParsedReply {
     }
     if (!TOP.has(t.name)) {
       const { inner, after } = sliceInner(text, t.end, t.name);
-      bodySegs.push(inner);
+      pushText(inner);
       i = after;
       continue;
     }
     const { inner, after } = sliceInner(text, t.end, t.name);
-    if (t.name === "think" || t.name === "think_nya" || t.name === "think_nya~" || t.name === "os") {
+    if (t.name === "thinking") {
+      const body = tidy(inner);
+      if (body) {
+        inline = true;
+        flow.push({ kind: "think", title: "思考", body });
+      }
+    } else if (t.name === "interleaving") {
+      takeChild(inner);
+    } else if (t.name === "suot") {
+      options.push(...parseSuot(inner));
+    } else if (t.name === "think" || t.name === "think_nya" || t.name === "think_nya~" || t.name === "os") {
       const body = tidy(inner);
       if (body) think.push({ kind: "think", title: thinkTitle(t.name), body });
     } else if (isReport(t.name)) {
@@ -254,7 +384,7 @@ export function parseReplyMarkup(raw: string): ParsedReply {
       reportLead = "";
       if (body) think.push({ kind: "think", title: "分析", body });
     } else if (t.name === "game") {
-      bodySegs.push(inner);
+      pushText(inner);
     } else if (t.name === "background") {
       pushNote("背景", tidy(inner));
     } else if (t.name === "details") {
@@ -273,8 +403,7 @@ export function parseReplyMarkup(raw: string): ParsedReply {
     i = after;
   }
 
-  const body = tidy(bodySegs.join(""));
-  return { body, folds: [...think, ...notes], options };
+  return { bodySegs, folds: [...think, ...notes], options, flow, inline };
 }
 
 export function replyStoryText(raw: string): string {
